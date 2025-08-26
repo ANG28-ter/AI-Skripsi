@@ -1,0 +1,66 @@
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.prose-invert th {
+  background-color: #222;
+}
+
+.prose-invert table {
+  border-collapse: collapse;
+}
+
+.prose-invert td,
+.prose-invert th {
+  border: 1px solid #444;
+  padding: 0.5rem;
+}
+
+mark.merah {
+  background-color: #7f1d1d; /* merah lebih gelap */
+  color: #fff;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+mark.kuning {
+  background-color: #7c6f26; /* kuning lebih gelap dan kalem */
+  color: #fff;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+mark.hijau {
+  background-color: #14532d; /* hijau lebih gelap */
+  color: #fff;
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+}
+.scrollbar-thumb {
+  scrollbar-color: #475569 transparent;
+}
+
+@media print {
+  body {
+    background: white !important;
+  }
+  * {
+    color: black !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
+
