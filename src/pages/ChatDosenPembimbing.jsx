@@ -20,6 +20,7 @@ import {
   PanelLeftClose,
   Square as LucideSquare,
   X,
+  Check,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
@@ -30,6 +31,9 @@ import { loadField } from "../services/firestoreService";
 import { useLocation } from "react-router-dom";
 // import { chatRepo } from "../data/repos/chatRepo";
 import { chatServices } from "../services/chatServices";
+import { observeAuth } from "../services/auth";
+import { useNavigate } from "react-router-dom";
+import { logout } from "../services/auth";
 import MarkdownParagraphReadOnly from "../components/MarkdownParagraphFadeInReadOnly";
 
 export default function ChatDosenPembimbing() {
@@ -58,11 +62,17 @@ export default function ChatDosenPembimbing() {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
 
+  // login & logout
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [user, setUser] = useState(null);
+
   // conversation / sidebar
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   // conversations list now always fetched via chatServices (dual storage)
   const [conversations, setConversations] = useState([]);
+  const [copied, setCopied] = useState(false);
+  const [copiedIndex, setCopiedIndex] = useState(null);
 
   // active id tetap di-hold di local (biar cepat & tidak perlu network)
   // state
@@ -82,21 +92,33 @@ export default function ChatDosenPembimbing() {
 
   // init kosong
   const [messages, setMessages] = useState([]);
+  const [autoScroll, setAutoScroll] = useState(true);
 
   // efek jalan ketika activeConversationId berubah
   useEffect(() => {
-    if (!activeConversationId) {
-      setMessages([]);
-      return;
+    if (activeConversationId) {
+      chatServices.loadConversation(activeConversationId).then((conv) => {
+        if (conv?.messages) {
+          setMessages((prev) => {
+            // kalau ada systemMessage baru di prev, jangan dihapus
+            const merged = [...conv.messages];
+
+            // tambahin semua msg yang ada di prev tapi belum ada di conv
+            prev.forEach((m) => {
+              if (
+                !merged.find(
+                  (x) => x.content === m.content && x.role === m.role
+                )
+              ) {
+                merged.push(m);
+              }
+            });
+
+            return merged;
+          });
+        }
+      });
     }
-    (async () => {
-      const conv = await chatServices.loadConversation(activeConversationId);
-      if (conv?.messages) {
-        setMessages(conv.messages);
-      } else {
-        setMessages([]);
-      }
-    })();
   }, [activeConversationId]);
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -116,65 +138,102 @@ export default function ChatDosenPembimbing() {
     setIsLoaded(true);
   }, []);
 
+  // ✅ jangan tunggu activeConversationId; biarkan sinkronisasi messages -> conversation yang create ID-nya
+  const convLoadedRef = useRef(false);
+
   useEffect(() => {
-    if (location.state?.contextText) {
-      const { contextTitle, contextText } = location.state;
+    convLoadedRef.current = true;
+  }, []); // flag "sudah mount"
 
-      const systemMessage = {
-        role: "system",
-        content: `📄 Konteks terlampir: "${
-          contextTitle || "Subbab"
-        }"\n\n${contextText}\n\n💡 Silakan ajukan pertanyaan terkait konteks di atas.`,
-      };
+  useEffect(() => {
+    if (!contextText) return;
 
-      // Simpan hiddenContext terbaru (opsional, kalau mau tracking satu aja)
-      setHiddenContext({ title: contextTitle, text: contextText });
-      localStorage.setItem(
-        "hiddenContext",
-        JSON.stringify({ title: contextTitle, text: contextText })
+    const systemMessage = {
+      role: "system",
+      content: `📄 Konteks terlampir: "${
+        contextTitle || "Subbab"
+      }"\n\n${contextText}\n\n💡 Silakan ajukan pertanyaan terkait konteks di atas. Subbab yang di kirim tidak dapat di kirim kembali, sudah otomatis tersimpan.`,
+    };
+
+    // update hiddenContext (biar backend selalu dapet konteks terbaru)
+    const newCtx = { title: contextTitle, text: contextText };
+    setHiddenContext(newCtx);
+    localStorage.setItem("hiddenContext", JSON.stringify(newCtx));
+
+    setMessages((prev) => {
+      // cek apakah subbab ini sudah pernah disuntik
+      const alreadyInjected = prev.some(
+        (m) =>
+          m.role === "system" &&
+          m.content?.includes(contextText) &&
+          m.content?.includes(contextTitle || "Subbab")
       );
+      if (alreadyInjected) return prev;
 
-      // ⬅️ Bedanya di sini: append, bukan replace
-      setMessages((prev) => [...prev, systemMessage]);
+      const next = [...prev, systemMessage];
+
+      if (activeConversationId) {
+        chatServices
+          .saveConversation(activeConversationId, {
+            id: activeConversationId,
+            title:
+              activeConversationId === DOSEN_CONV_ID
+                ? "Tanya Dosen"
+                : "Percakapan",
+            messages: next,
+            updatedAt: Date.now(),
+          })
+          .catch((err) => console.error("saveConversation error:", err));
+      }
+
+      return next;
+    });
+
+    if (!activeConversationId && mode === "tanya_dosen") {
+      setActiveConversationId(DOSEN_CONV_ID);
     }
-  }, [location.state]);
+  }, [contextText, contextTitle, activeConversationId, mode]);
 
+  //  detected auth login
   useEffect(() => {
-    // Cek apakah hiddenContext sudah ada di localStorage
-    const savedContext = localStorage.getItem("hiddenContext");
-    if (savedContext) {
-      setHiddenContext(JSON.parse(savedContext));
-      return; // ⬅️ Jangan inject lagi, cukup pakai yang lama
+    const unsub = observeAuth((u) => setUser(u));
+    return unsub;
+  }, []);
+
+  const navigate = useNavigate();
+
+  const handleLogout = async () => {
+    try {
+      await logout(); // pake service auth.js
+      navigate("/login", { replace: true }); // langsung lempar ke login
+    } catch (err) {
+      console.error("❌ Gagal logout:", err);
     }
-
-    // Kalau fresh dari SkripsiSection
-    if (contextText) {
-      const systemMessage = {
-        role: "system",
-        content: `📄 Konteks terlampir: "${
-          contextTitle || "Subbab"
-        }"\n\n${contextText}\n\n💡 Silakan ajukan pertanyaan terkait konteks di atas, maka saya akan menjawab secara mendalam.`,
-      };
-
-      // Simpan ke state + localStorage
-      const newCtx = { title: contextTitle, text: contextText };
-      setHiddenContext(newCtx);
-      localStorage.setItem("hiddenContext", JSON.stringify(newCtx));
-
-      // Inject system message sekali di percakapan
-      setMessages((prev) => [...prev, systemMessage]);
-    }
-  }, [contextText, contextTitle]);
+  };
 
   // smooth scroll when new content
+
+  const handleScroll = () => {
+    if (!chatContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current;
+
+    // kalau user deket banget ke bawah (≤ 50px dari bottom)
+    const isNearBottom = scrollHeight - scrollTop - clientHeight < 50;
+    setAutoScroll(isNearBottom);
+  };
+
   useEffect(() => {
-    if (chatEndRef.current && shouldScroll) {
-      setTimeout(() => {
-        chatEndRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
-      }, 60);
-      setShouldScroll(false);
+    const el = chatContainerRef.current;
+    if (!el) return;
+    el.addEventListener("scroll", handleScroll);
+    return () => el.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  useEffect(() => {
+    if (autoScroll && chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: "auto", block: "end" });
     }
-  }, [messages, typingText, shouldScroll]);
+  }, [messages, typingText, autoScroll]);
 
   // keep messages synced into conversations store
 
@@ -638,34 +697,40 @@ export default function ChatDosenPembimbing() {
     if (!content && !file) return;
 
     const safeFile = file || null;
+
     const userMessage = {
       role: "user",
-      content: content || "(Tidak ada pertanyaan)",
+      content: content?.trim() || "(Tidak ada pertanyaan)",
       file: safeFile,
     };
 
-    // ✅ tentukan target sesuai mode
+    // ✅ pastikan conv id target jelas
     const targetConvId =
-      activeConversationId || (mode === "tanya_dosen" ? DOSEN_CONV_ID : null);
+      mode === "tanya_dosen" ? DOSEN_CONV_ID : activeConversationId;
+    if (!targetConvId) {
+      // belum ada conv, bikin baru
+      return;
+    }
 
+    // simpan userMessage ke state
     const newMessages = [...messages, userMessage];
     setMessages(newMessages);
     setShouldScroll(true);
     setLoading(true);
 
-    // simpan bila sudah ada id aktif
-    if (activeConversationId) {
-      await chatServices.saveConversation(activeConversationId, {
-        id: activeConversationId,
+    // kalau sudah ada conversation aktif → update storage
+    if (targetConvId) {
+      setActiveConversationId(targetConvId);
+      await chatServices.saveConversation(targetConvId, {
+        id: targetConvId,
+        title: targetConvId === DOSEN_CONV_ID ? "Tanya Dosen" : "Percakapan",
         messages: newMessages,
         updatedAt: Date.now(),
       });
     }
 
-    // set active kalau sudah ada target id (DOSEN) – untuk mode umum biarkan efek auto-create yang bikin id
-    if (targetConvId) setActiveConversationId(targetConvId);
-
     try {
+      // ✅ pastikan hiddenContext ikut terkirim (subbab terbaru selalu ikut)
       const payload = {
         conversationId: targetConvId,
         history: newMessages,
@@ -691,7 +756,8 @@ export default function ChatDosenPembimbing() {
         segments || null
       );
 
-      if (summaryText && (activeConversationId || targetConvId)) {
+      // update judul conv
+      if ((activeConversationId || targetConvId) && summaryText) {
         const cid = activeConversationId || targetConvId;
         setConversations((prev) =>
           prev.map((c) =>
@@ -746,6 +812,20 @@ export default function ChatDosenPembimbing() {
     setSelectedFile(null);
     setUploadedFileName("");
     setUploadedFileText("");
+  };
+
+  // kirim pesan dengan override teks (untuk quick replies)
+  const sendQuick = async (text) => {
+    if (!text?.trim()) return;
+    const safeFile =
+      uploadedFileName && uploadedFileText
+        ? { name: uploadedFileName, content: uploadedFileText }
+        : null;
+
+    await sendMessage(text, safeFile, null, {
+      contextTitle: hiddenContext?.title || contextTitle || null,
+      contextText: hiddenContext?.text || loadContextText(contextKey) || null,
+    });
   };
 
   // wrapper used by submitting form
@@ -850,12 +930,12 @@ export default function ChatDosenPembimbing() {
     }
   };
   // ---------- UI actions ----------
-  const handleCopy = async (text) => {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch (err) {
-      console.error("Copy failed", err);
-    }
+  const handleCopy = (text, index) => {
+    navigator.clipboard.writeText(text);
+    setCopiedIndex(index);
+
+    // reset ke null setelah 2 detik
+    setTimeout(() => setCopiedIndex(null), 2000);
   };
 
   const handleRetry = (index) => handleReload(index);
@@ -973,12 +1053,20 @@ export default function ChatDosenPembimbing() {
           {sidebarOpen && (
             <div className="px-4 py-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-400 to-cyan-400 flex items-center justify-center shadow">
-                  <User className="w-5 h-5 text-white" />
+                {/* Avatar bulat */}
+                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-400 to-cyan-400 flex items-center justify-center shadow text-white font-bold">
+                  {user?.displayName?.[0]?.toUpperCase() ||
+                    user?.email?.[0]?.toUpperCase() || (
+                      <User className="w-5 h-5" />
+                    )}
                 </div>
                 <div>
-                  <div className="font-semibold">Pengguna</div>
-                  <div className="text-xs text-neutral-300">Akun Anda</div>
+                  <div className="font-semibold">
+                    {user?.displayName || user?.email || "Pengguna"}
+                  </div>
+                  <div className="text-xs text-neutral-300">
+                    {user ? "Akun Anda" : "Belum login"}
+                  </div>
                 </div>
               </div>
               <button
@@ -991,12 +1079,13 @@ export default function ChatDosenPembimbing() {
             </div>
           )}
 
+          {/* Tombol atas */}
           <div className="px-3 py-3">
             {sidebarOpen ? (
               <>
                 <button
                   onClick={openNewConversation}
-                  className="w-full flex items-center gap-3 px-3 py-2 rounded-md bg-white/5 hover:bg-white/6"
+                  className="w-full flex items-center gap-3 px-3 py-2 rounded-md bg-white/5 hover:bg-white/10"
                 >
                   <Plus className="w-4 h-4 text-emerald-300" />
                   <span className="text-sm">Obrolan Baru</span>
@@ -1035,11 +1124,14 @@ export default function ChatDosenPembimbing() {
             )}
           </div>
 
+          {/* Daftar percakapan */}
           <div className="flex-1 overflow-y-auto custom-scroll p-2">
             <style>{`.custom-scroll::-webkit-scrollbar{width:8px}.custom-scroll::-webkit-scrollbar-thumb{background:linear-gradient(180deg,#10B981,#06B6D4);border-radius:8px}`}</style>
             <div className="space-y-2 py-2">
               {visibleConversations.length === 0 && (
-                <div className="text-xs text-neutral-400 px-2"></div>
+                <div className="text-xs text-neutral-400 px-2">
+                  Belum ada percakapan
+                </div>
               )}
               {visibleConversations.map((conv) => {
                 const active = conv.id === activeConversationId;
@@ -1050,7 +1142,7 @@ export default function ChatDosenPembimbing() {
                     className={`flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer ${
                       active
                         ? "bg-emerald-600/10 border border-emerald-500/20"
-                        : "hover:bg-white/2"
+                        : "hover:bg-white/5"
                     }`}
                     onClick={() => loadConversation(conv)}
                   >
@@ -1089,6 +1181,7 @@ export default function ChatDosenPembimbing() {
             </div>
           </div>
 
+          {/* Footer */}
           <div className="px-4 py-3 border-t border-neutral-800/50">
             {sidebarOpen ? (
               <div className="flex items-center justify-between">
@@ -1096,8 +1189,9 @@ export default function ChatDosenPembimbing() {
                   AI Dosen Pembimbing
                 </div>
                 <button
+                  onClick={() => setShowConfirm(true)}
                   title="Logout"
-                  className="p-2 rounded-md hover:bg-white/2"
+                  className="p-2 rounded-md hover:bg-white/10"
                 >
                   <LogOut className="w-4 h-4" />
                 </button>
@@ -1110,6 +1204,32 @@ export default function ChatDosenPembimbing() {
           </div>
         </div>
       </aside>
+
+      {showConfirm && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black/50 z-50">
+          <div className="bg-neutral-900 text-white rounded-xl p-6 shadow-xl w-80">
+            <h2 className="text-lg font-semibold mb-4">Konfirmasi Logout</h2>
+            <p className="text-sm text-neutral-300 mb-6">
+              Apakah anda yakin ingin logout?
+            </p>
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowConfirm(false)}
+                className="px-4 py-2 rounded-lg bg-neutral-700 hover:bg-neutral-600 text-sm"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleLogout}
+                className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-sm"
+              >
+                Ya, Logout
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main chat area */}
       <div className="flex-1 flex flex-col">
@@ -1128,9 +1248,16 @@ export default function ChatDosenPembimbing() {
 
           <div className="flex items-center gap-3">
             <button
-              onClick={handleClearChat}
+              onClick={
+                typeof handleClearChat === "function"
+                  ? handleClearChat
+                  : () => {}
+              }
               className="flex items-center gap-2 text-sm text-red-400 hover:text-red-300 p-2 rounded-md"
-            ></button>
+              title="Hapus semua chat"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
           </div>
         </header>
 
@@ -1143,6 +1270,7 @@ export default function ChatDosenPembimbing() {
               <AnimatePresence initial={false}>
                 {messages.map((msg, i) => {
                   const isUser = msg.role === "user";
+                  const isSystem = msg.role === "system";
                   const isRevision = msg.intent === "revision_given";
                   const endsWithQuestion =
                     msg.role === "assistant" &&
@@ -1159,7 +1287,8 @@ export default function ChatDosenPembimbing() {
                         isUser ? "justify-end" : "justify-start"
                       } group`}
                     >
-                      {!isUser && (
+                      {/* Avatar AI */}
+                      {!isUser && !isSystem && (
                         <div className="flex-shrink-0 mr-3">
                           <div className="w-10 h-10 rounded-full flex items-center justify-center">
                             <GraduationCap className="w-5 h-5 text-white" />
@@ -1172,17 +1301,25 @@ export default function ChatDosenPembimbing() {
                           className={`px-4 py-3 rounded-2xl ${
                             isUser
                               ? "bg-neutral-800/50 text-white"
+                              : isSystem
+                              ? "bg-neutral-700/30 text-neutral-300 italic text-xs"
                               : isRevision
                               ? "bg-green-900/30 border border-green-700 text-green-100"
                               : "text-neutral-100"
                           }`}
                           style={{ wordBreak: "break-word" }}
                         >
-                          {isUser ? (
+                          {isUser && (
                             <div style={{ whiteSpace: "pre-wrap" }}>
                               {msg.content}
                             </div>
-                          ) : (
+                          )}
+                          {isSystem && (
+                            <div style={{ whiteSpace: "pre-wrap" }}>
+                              {msg.content}
+                            </div>
+                          )}
+                          {!isUser && !isSystem && (
                             <div>
                               {isRevision && (
                                 <div className="text-green-400 font-bold mb-1">
@@ -1194,14 +1331,14 @@ export default function ChatDosenPembimbing() {
                           )}
                         </div>
 
-                        {/* Hint kalau AI ngasih pertanyaan balik */}
+                        {/* Hint kalau AI nanya balik */}
                         {endsWithQuestion && (
                           <div className="text-xs text-blue-400 italic mt-1">
                             💡 Dosen menunggu jawaban singkat kamu...
                           </div>
                         )}
 
-                        {/* Quick reply buttons */}
+                        {/* Quick reply */}
                         {endsWithQuestion && (
                           <div className="flex gap-2 mt-2">
                             {[
@@ -1211,7 +1348,7 @@ export default function ChatDosenPembimbing() {
                             ].map((opt) => (
                               <button
                                 key={opt}
-                                onClick={() => handleSend(opt)}
+                                onClick={() => sendQuick(opt)}
                                 className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm"
                               >
                                 {opt}
@@ -1220,8 +1357,14 @@ export default function ChatDosenPembimbing() {
                           </div>
                         )}
 
-                        {!isUser && (
-                          <div className="mt-2 flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-xs text-neutral-400">
+                        {/* Actions (copy, retry) → berlaku untuk user & AI */}
+                        {!isSystem && (
+                          <div
+                            className={`mt-2 flex gap-3 opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-xs text-neutral-400 ${
+                              isUser ? "justify-end" : ""
+                            }`}
+                          >
+                            {/* Tombol Copy */}
                             <button
                               onClick={() =>
                                 handleCopy(
@@ -1229,25 +1372,41 @@ export default function ChatDosenPembimbing() {
                                     ? msg.segments
                                         .map((s) => s.text)
                                         .join("\n\n")
-                                    : msg.content || ""
+                                    : msg.content || "",
+                                  i
                                 )
                               }
+                              title="Salin teks"
                               className="flex items-center gap-1 px-2 py-1 rounded-md hover:text-emerald-300"
-                              title="Salin"
                             >
-                              <Copy className="w-4 h-4" />
+                              {copiedIndex === i ? (
+                                <>
+                                  <Check className="w-4 h-4 text-emerald-400" />
+                                  <span className="text-emerald-400">
+                                    Disalin
+                                  </span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-4 h-4" />
+                                </>
+                              )}
                             </button>
 
-                            <button
-                              onClick={() => handleRetry(i)}
-                              className="flex items-center gap-1 px-2 py-1 rounded-md hover:text-yellow-300"
-                              title="Ulangi"
-                            >
-                              <RotateCcw className="w-4 h-4" />
-                            </button>
+                            {/* Retry hanya untuk AI */}
+                            {!isUser && (
+                              <button
+                                onClick={() => handleRetry(i)}
+                                className="flex items-center gap-1 px-2 py-1 rounded-md hover:text-yellow-300"
+                                title="Ulangi"
+                              >
+                                <RotateCcw className="w-4 h-4" />
+                              </button>
+                            )}
                           </div>
                         )}
 
+                        {/* File attachment */}
                         {msg.file && (
                           <div className="mt-3 flex items-center gap-3 text-xs text-neutral-300">
                             {renderFileIcon(getFileExtension(msg.file.name))}
@@ -1262,6 +1421,7 @@ export default function ChatDosenPembimbing() {
                 })}
               </AnimatePresence>
 
+              {/* Loading state */}
               {loading && (
                 <motion.div
                   initial={{ opacity: 0, y: 6 }}
@@ -1278,6 +1438,7 @@ export default function ChatDosenPembimbing() {
                 </motion.div>
               )}
 
+              {/* Typing effect */}
               {typingText && (
                 <div className="flex items-start gap-3">
                   <div className="flex-shrink-0 mr-3">
@@ -1296,6 +1457,7 @@ export default function ChatDosenPembimbing() {
                 </div>
               )}
 
+              {/* Empty state */}
               {messages.length === 0 && (
                 <div className="rounded-xl bg-white/5 backdrop-blur-sm p-6 text-sm text-neutral-300 shadow-inner">
                   <p className="mb-2 font-semibold text-white">
@@ -1316,6 +1478,7 @@ export default function ChatDosenPembimbing() {
             </div>
           </div>
         </div>
+        {/* </div> */}
 
         {/* Footer / Composer */}
         <footer className="px-4 sm:px-6 lg:px-8 py-4 bg-neutral-900/10">

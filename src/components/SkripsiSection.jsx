@@ -178,12 +178,12 @@ export default function SkripsiSection({
 
                     <button
                       onClick={() =>
-                        navigate("/chat-dosen", {
+                        navigate("/chat-dosen?mode=tanya_dosen", {
                           state: {
                             contextType: "subbab",
-                            contextKey: subBabId,
-                            contextTitle: judulSubbab, // ✅ terbaca
-                            contextText: isi, // ✅ isi subbab
+                            contextKey: babId,
+                            contextTitle: title,
+                            contextText: finalOutput,
                           },
                         })
                       }
@@ -197,18 +197,15 @@ export default function SkripsiSection({
               })
             ) : (
               <>
-                <MarkdownParagraphFadeIn
-                  content={finalOutput}
-                  babId={babId}
-                />
+                <MarkdownParagraphFadeIn content={finalOutput} babId={babId} />
                 {/* Jika single subbab → tetap kasih tombol Tanya Dosen */}
                 <button
                   onClick={() =>
-                    navigate("/chat-dosen", {
+                    navigate("/chat-dosen?mode=tanya_dosen", {
                       state: {
                         contextType: "subbab",
                         contextKey: babId,
-                        contextTitle: title, // ✅ judul utama terbaca
+                        contextTitle: title,
                         contextText: finalOutput,
                       },
                     })
