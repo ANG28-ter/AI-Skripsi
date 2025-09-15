@@ -43,6 +43,7 @@ export default function DaftarPustakaGenerator() {
   };
 
   const generateDaftarPustaka = async () => {
+    setLoading(true);
     // 🔹 Ambil semua BAB 1-4
     const bab1 = await getBabData([
       "skripsi_latarBelakang",
@@ -83,8 +84,6 @@ export default function DaftarPustakaGenerator() {
       alert("BAB 1–4 belum lengkap. Silakan lengkapi semua bagian.");
       return;
     }
-
-    setLoading(true);
     try {
       const res = await fetch("http://localhost:3001/generate-daftar-pustaka", {
         method: "POST",

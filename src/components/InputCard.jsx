@@ -1,7 +1,7 @@
 import React from "react";
 import JurusanSelector from "./JurusanSelector";
-import { Sparkles, GraduationCap } from "lucide-react";
-import { saveField } from "../services/firestoreService"; // pastikan path benar
+import { Sparkles, GraduationCap, AlertCircle } from "lucide-react";
+import { saveField } from "../services/firestoreService";
 
 export default function InputCard({ topik, setTopik, jurusan, setJurusan }) {
   const handleTopikChange = async (e) => {
@@ -27,7 +27,8 @@ export default function InputCard({ topik, setTopik, jurusan, setJurusan }) {
   };
 
   return (
-    <div className="bg-surfaceDark/80 backdrop-blur-md p-8 md:p-10 rounded-2xl max-w-3xl mx-auto space-y-6 shadow-lg">
+    <div className="bg-surfaceDark/80 backdrop-blur-md p-6 sm:p-8 md:p-10 rounded-2xl w-full max-w-3xl mx-auto space-y-6 shadow-lg">
+      {/* Input Topik */}
       <div>
         <label className="inline-flex items-center gap-2 text-slate-300 text-sm font-medium mb-2">
           <Sparkles className="w-5 h-5 text-primary" />
@@ -37,19 +38,17 @@ export default function InputCard({ topik, setTopik, jurusan, setJurusan }) {
           value={topik}
           onChange={handleTopikChange}
           placeholder="Masukkan topik skripsi"
-          className="w-full px-6 py-3 rounded-xl bg-zinc-800/80 backdrop-blur text-white text-base placeholder:text-zinc-500 focus:outline-none focus:ring-2 ring-primary"
+          className="w-full px-4 py-3 rounded-xl bg-zinc-800/80 backdrop-blur text-white text-sm sm:text-base placeholder:text-zinc-500 focus:outline-none focus:ring-2 ring-primary transition"
         />
       </div>
 
+      {/* Dropdown Jurusan */}
       <div>
         <label className="inline-flex items-center gap-2 text-slate-300 text-sm font-medium mb-2">
           <GraduationCap className="w-5 h-5 text-primary" />
           Jurusan
         </label>
-        <JurusanSelector
-          value={jurusan}
-          onChange={handleJurusanChange}
-        />
+        <JurusanSelector value={jurusan} onChange={handleJurusanChange} />
       </div>
     </div>
   );

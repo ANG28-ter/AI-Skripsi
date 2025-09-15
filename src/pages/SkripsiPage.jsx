@@ -22,6 +22,8 @@ import {
   clearFields,
 } from "../services/firestoreService";
 import { clearAllParaphrases } from "/src/services/paraphraseStore";
+import { debugErrorMap } from "firebase/auth";
+import { AlertCircle } from "lucide-react";
 
 // Komponen untuk indikator loading dengan ikon premium
 const LoadingSpinner = () => (
@@ -446,6 +448,7 @@ export default function SkripsiGenerator() {
 
   const hapusSemuaHasil = async () => {
     if (!confirm("Yakin ingin menghapus semua hasil?")) return;
+    setLoading(true);
     try {
       const keys = [
         "topik",
@@ -819,7 +822,19 @@ export default function SkripsiGenerator() {
                 setJurusan={setJurusan}
               />
 
-              <div className="max-w-3xl mx-auto mt-8 grid grid-cols-1 sm:grid-cols-3 md:grid-cols-3 gap-4">
+              <div className="p-3 text-red-300 text-xs mx-auto max-w-3xl">
+                {/* Warning kecil */}
+                <p className="mt-3 flex items-start gap-2 text-xs sm:text-sm text-yellow-400 bg-yellow-500/10 p-3 rounded-lg border border-yellow-500/30">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>
+                    AI dapat memberikan saran yang tidak selalu akurat. Mohon
+                    verifikasi ulang sebelum digunakan.
+                  </span>
+                </p>
+              </div>
+
+              {/* Tombol Generate */}
+              <div className="max-w-3xl mx-auto mt-8 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 gap-3">
                 <ActionButton
                   onClick={generate}
                   label="Cari"
@@ -857,21 +872,22 @@ export default function SkripsiGenerator() {
                   color="secondary"
                 />
               </div>
-            </div>
 
-            <div className="max-w-3xl mx-auto mt-6 gap-3 flex justify-end">
-              <ActionButton
-                onClick={hapusSemuaHasil}
-                label="Hapus"
-                color="danger"
-              />
-              {loading && (
+              {/* Tombol Hapus */}
+              <div className="max-w-3xl mx-auto mt-6 flex justify-end px-2">
                 <ActionButton
-                  onClick={skripsi.cancelGenerate}
-                  label="Batalkan"
-                  color=""
+                  onClick={hapusSemuaHasil}
+                  label="Hapus Semua"
+                  color="danger"
                 />
-              )}
+                {loading && (
+                  <ActionButton
+                    onClick={skripsi.cancelGenerate}
+                    label="Batalkan"
+                    color=""
+                  />
+                )}
+              </div>
             </div>
 
             {loading && <LoadingSpinner />}

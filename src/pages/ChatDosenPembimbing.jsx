@@ -61,13 +61,15 @@ export default function ChatDosenPembimbing() {
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
+  const [recognition, setRecognition] = useState(null);
+  const [isListening, setIsListening] = useState(false);
 
   // login & logout
   const [showConfirm, setShowConfirm] = useState(false);
   const [user, setUser] = useState(null);
 
   // conversation / sidebar
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth >= 768);
 
   // conversations list now always fetched via chatServices (dual storage)
   const [conversations, setConversations] = useState([]);
@@ -236,7 +238,6 @@ export default function ChatDosenPembimbing() {
   }, [messages, typingText, autoScroll]);
 
   // keep messages synced into conversations store
-
   useEffect(() => {
     (async () => {
       if (messages.length === 0) return;
@@ -257,10 +258,10 @@ export default function ChatDosenPembimbing() {
           setActiveConversationId(DOSEN_CONV_ID);
         } else {
           const id = `conv_${Date.now()}`;
-          const title = renameConversationFromMessages(messages);
           const conv = {
             id,
-            title,
+            // ⚡ awalnya pakai fallback, biar nggak kosong
+            title: renameConversationFromMessages(messages),
             messages,
             createdAt: Date.now(),
             updatedAt: Date.now(),
@@ -272,12 +273,17 @@ export default function ChatDosenPembimbing() {
           setActiveConversationId(id);
         }
       } else {
+        // ✅ Jangan override title AI dengan fallback
+        const existing = conversations.find(
+          (c) => c.id === activeConversationId
+        );
+
         const conv = {
           id: activeConversationId,
           title:
             activeConversationId === DOSEN_CONV_ID
               ? "Tanya Dosen"
-              : renameConversationFromMessages(messages),
+              : existing?.title || "Percakapan baru", // pakai existing dulu
           messages,
           updatedAt: Date.now(),
         };
@@ -422,20 +428,27 @@ export default function ChatDosenPembimbing() {
 
   // ---------- Conversation helpers ----------
   const renameConversationFromMessages = (messagesList) => {
+    if (!messagesList || messagesList.length === 0) return "Percakapan baru";
+
+    // ambil pesan user pertama
     const firstUser = messagesList.find((m) => m.role === "user");
-    if (!firstUser) return "Percakapan baru";
-    const text = String(firstUser.content || "")
-      .trim()
-      .replace(/\s+/g, " ");
-    return text.length > 60 ? text.slice(0, 57) + "..." : text;
+    const raw = String(firstUser?.content || "").trim();
+
+    if (!raw) return "Percakapan baru";
+
+    // potong maksimal 6 kata
+    const words = raw.split(/\s+/);
+    const limited = words.slice(0, 6).join(" ");
+
+    return words.length > 5 ? limited + "..." : limited;
   };
 
   const openNewConversation = async () => {
     const id = `conv_${Date.now()}`;
     const conv = {
       id,
-      title: "Percakapan baru",
-      messages: [],
+      title: "Percakapan baru", // ✅ string literal
+      messages: [], // ✅ kosongin aja
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -522,30 +535,53 @@ export default function ChatDosenPembimbing() {
   };
 
   // ---------- File upload handlers ----------
+  const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3001";
+
   const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
     setSelectedFile(file);
 
     const form = new FormData();
     form.append("file", file);
 
     try {
-      const res = await fetch("http://localhost:3001/upload", {
+      const res = await fetch(`${API_BASE}/upload`, {
         method: "POST",
         body: form,
       });
+
       if (!res.ok) throw new Error(`Upload failed ${res.status}`);
+
       const data = await res.json();
-      if (data.extractedText) {
+
+      // ✅ Validasi isi
+      const extracted = String(data.extractedText || "").trim();
+      if (!extracted || extracted.length < 30) {
+        alert(
+          "⚠️ File berhasil diupload tapi teks terlalu sedikit atau kosong. " +
+            "Pastikan formatnya PDF/DOCX/TXT yang bisa dibaca."
+        );
         setUploadedFileName(file.name);
-        setUploadedFileText(String(data.extractedText));
-      } else {
-        alert("Gagal mengekstrak file.");
+        setUploadedFileText("");
+        return;
       }
+
+      // ✅ Simpan hasil
+      setUploadedFileName(file.name);
+      setUploadedFileText(extracted);
+
+      // ✅ Preview kecil di console (buat dev/debugging)
+      console.log(
+        "📄 File berhasil dibaca:",
+        file.name,
+        "Preview:",
+        extracted.slice(0, 300) + (extracted.length > 300 ? "..." : "")
+      );
     } catch (err) {
-      console.error("Upload error:", err);
-      alert("Terjadi kesalahan saat upload.");
+      console.error("❌ Upload error:", err);
+      alert("Terjadi kesalahan saat upload. Coba lagi atau ganti format file.");
       setSelectedFile(null);
       setUploadedFileName("");
       setUploadedFileText("");
@@ -568,45 +604,46 @@ export default function ChatDosenPembimbing() {
   };
 
   // ---------- Audio record & transcribe ----------
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream);
-      mediaRecorderRef.current = mr;
-      audioChunksRef.current = [];
-
-      mr.ondataavailable = (e) => audioChunksRef.current.push(e.data);
-      mr.onstop = async () => {
-        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-        const form = new FormData();
-        form.append("audio", blob);
-        try {
-          const res = await fetch("http://localhost:3001/transcribe", {
-            method: "POST",
-            body: form,
-          });
-          if (!res.ok) throw new Error("Transcribe failed");
-          const data = await res.json();
-          setInput(String(data.transcript || ""));
-        } catch (err) {
-          console.error("Transcribe error", err);
-          alert("Transcribe gagal");
-        }
-      };
-
-      mr.start();
-      setIsRecording(true);
-    } catch (err) {
-      console.error("Record init error", err);
-      alert("Gagal akses mikrofon.");
+  const startListening = () => {
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert("Browser kamu tidak mendukung Speech Recognition.");
+      return;
     }
+
+    const recog = new SpeechRecognition();
+    recog.lang = "id-ID"; // bisa ganti ke "en-US" kalau mau bahasa Inggris
+    recog.continuous = true; // biar jalan terus
+    recog.interimResults = true; // biar teks muncul live sebelum fix
+
+    recog.onresult = (event) => {
+      let transcript = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+      }
+      setInput(transcript); // update ke input chat
+    };
+
+    recog.onerror = (event) => {
+      console.error("SpeechRecognition error:", event.error);
+      setIsListening(false);
+    };
+
+    recog.onend = () => {
+      setIsListening(false);
+    };
+
+    recog.start();
+    setRecognition(recog);
+    setIsListening(true);
   };
 
-  const stopRecording = () => {
-    try {
-      mediaRecorderRef.current?.stop();
-    } catch {}
-    setIsRecording(false);
+  const stopListening = () => {
+    if (recognition) {
+      recognition.stop();
+      setIsListening(false);
+    }
   };
 
   // ---------- Typing animation (string-based) ----------
@@ -705,11 +742,22 @@ export default function ChatDosenPembimbing() {
     };
 
     // ✅ pastikan conv id target jelas
-    const targetConvId =
+    let targetConvId =
       mode === "tanya_dosen" ? DOSEN_CONV_ID : activeConversationId;
     if (!targetConvId) {
-      // belum ada conv, bikin baru
-      return;
+      // auto-create conversation baru
+      targetConvId = `conv_${Date.now()}`;
+      const newConv = {
+        id: targetConvId,
+        title: "Percakapan baru",
+        messages: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      // simpan ke state & local
+      setActiveConversationId(targetConvId);
+      setConversations((prev) => [newConv, ...prev]);
+      localStorage.setItem("chat_dosen_active_conv", targetConvId);
     }
 
     // simpan userMessage ke state
@@ -732,7 +780,7 @@ export default function ChatDosenPembimbing() {
     try {
       // ✅ pastikan hiddenContext ikut terkirim (subbab terbaru selalu ikut)
       const payload = {
-        conversationId: targetConvId,
+        threadId: targetConvId,
         history: newMessages,
         message: userMessage.content,
         topik: "",
@@ -892,6 +940,7 @@ export default function ChatDosenPembimbing() {
     setLoading(true);
     try {
       const payload = {
+        threadId: activeConversationId,
         history: historyBefore,
         message: lastUserInput,
         topik: "",
@@ -1151,7 +1200,7 @@ export default function ChatDosenPembimbing() {
                     </div>
                     {sidebarOpen && (
                       <div className="flex-1">
-                        <div className="text-sm line-clamp-1">
+                        <div className="text-sm line-clamp-2">
                           {conv.title || "Percakapan baru"}
                         </div>
                         <div className="text-xs text-neutral-400">
@@ -1245,20 +1294,6 @@ export default function ChatDosenPembimbing() {
               </p>
             </div>
           </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              onClick={
-                typeof handleClearChat === "function"
-                  ? handleClearChat
-                  : () => {}
-              }
-              className="flex items-center gap-2 text-sm text-red-400 hover:text-red-300 p-2 rounded-md"
-              title="Hapus semua chat"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
-          </div>
         </header>
 
         <div
@@ -1296,7 +1331,7 @@ export default function ChatDosenPembimbing() {
                         </div>
                       )}
 
-                      <div className="max-w-[82%]">
+                      <div className="max-w-[90%] sm:max-w-[82%]">
                         <div
                           className={`px-4 py-3 rounded-2xl ${
                             isUser
@@ -1528,12 +1563,12 @@ export default function ChatDosenPembimbing() {
               <button
                 type="button"
                 onClick={() => {
-                  if (isRecording) stopRecording();
-                  else startRecording();
+                  if (isListening) stopListening();
+                  else startListening();
                 }}
                 title="Voice"
                 className={`p-2 rounded-full hover:bg-neutral-800/60 transition-colors flex-shrink-0 self-center ${
-                  isRecording
+                  isListening
                     ? "text-rose-400 animate-pulse"
                     : "text-neutral-300"
                 }`}
